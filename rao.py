@@ -3,6 +3,7 @@ import capytaine as cpt
 from capytaine.bem.airy_waves import airy_waves_free_surface_elevation
 from capytaine.io.xarray import problems_from_dataset
 from capytaine.ui.vtk import Animation
+from capytaine.meshes.predefined.rectangles import mesh_rectangle
 import xarray as xr
 from capytaine.post_pro.rao import rao
 import math
@@ -10,12 +11,19 @@ import math
 # cpt.set_logging('INFO')
 
 mesh = cpt.mesh_horizontal_cylinder(
-    length=2.0, radius=0.5,  
+    length=2.75, radius=0.5,  
     center=(0, 0, 0),         
     resolution=(5, 20, 40),
-    ).immersed_part()
+    ).immersed_part()    
 
-body = cpt.FloatingBody(mesh, dofs=cpt.rigid_body_dofs(rotation_center=(0.000000, 0.000000, 0.000000)), 
+lid_mesh = cpt.mesh_rectangle(
+    size=(1, 2.75),       
+    center=(0, 0, 0),
+    faces_max_radius=0.05,     
+    normal=(0.0, 0.0, -1.0),        
+)
+
+body = cpt.FloatingBody(mesh=mesh,lid_mesh=lid_mesh, dofs=cpt.rigid_body_dofs(rotation_center=(0.000000, 0.000000, 0.000000)), 
                         center_of_mass=(0.000000, 0.000000, 0.000000))
 hydro = body.compute_hydrostatics(rho=1025.0)  
 body.inertia_matrix = hydro["inertia_matrix"]
