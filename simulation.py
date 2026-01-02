@@ -42,8 +42,8 @@ mesh = plotter.add_mesh(
 # JONSWAP spectrum parameters
 # ----------------------------
 g = 9.81
-Hs = 1.0
-Tp = 8.0
+Hs = 2.5
+Tp = 6.0    
 gamma = 3.3
 
 f = np.linspace(0.01, 1.0, 50)
@@ -90,14 +90,20 @@ boat_ref = pv.read("sree/Ship.stl").triangulate()
 boat_ref.scale([0.002, 0.002, 0.002], inplace=True)
 boat_ref.rotate_z(90, point=boat_ref.center, inplace=True)
 
+# move horizontally to wave center
 target_center = np.array(grid.center)
-shift = target_center - np.array(boat_ref.center)
-boat_ref.translate(shift, inplace=True)
+shift_xy = target_center - np.array(boat_ref.center)
+shift_xy[2] = 0.0
+boat_ref.translate(shift_xy, inplace=True)
 
-# ---- FIX: PLACE BOAT ABOVE WATERLINE ----
-zmin, zmax = boat_ref.bounds[4], boat_ref.bounds[5]
-draft = 0.6 * (zmax - zmin)          # choose submergence
-boat_ref.translate([0, 0, -zmin - draft], inplace=True)
+# -----------------------------
+# CRITICAL FIX: WATERLINE ALIGN
+# -----------------------------
+zmin = boat_ref.bounds[4]      # lowest point of hull
+waterline_z = 0.0              # wave mean level
+draft = 0.3                    # meters below waterline (tune this)
+
+boat_ref.translate([0, 0, waterline_z - zmin - draft], inplace=True)
 
 boat = boat_ref.copy()
 boat_actor = plotter.add_mesh(
