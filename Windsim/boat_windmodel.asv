@@ -1,0 +1,165 @@
+
+clearvars; close all; clc;
+
+%% Import boat model
+
+fv = stlread('Boatmodel.stl');
+V = fv.Points;      % vertices
+F = fv.ConnectivityList;  % faces
+
+V = V * 1e-3; % convert to meters
+
+%% Place the boat in the world
+
+boat.pos = [3, 3, 2];  
+boat.R = eye(3);        
+V_corrected = V(:, [3, 1, 2]);
+V_world = (boat.R * V_corrected')' + boat.pos;
+
+%% Compute per-triangle data:
+% Triangle edges in world frame
+v1 = V_world(F(:,2),:) - V_world(F(:,1),:);
+v2 = V_world(F(:,3),:) - V_world(F(:,1),:);
+
+% Surface normals (world frame)
+normals = cross(v1, v2, 2);
+
+% Triangle areas
+areas = 0.5 * vecnorm(normals, 2, 2);
+
+% Normalize normals
+normals = normals ./ vecnorm(normals, 2, 2);
+
+% Triangle centroids (world frame)
+centroids = ( V_world(F(:,1),:) + V_world(F(:,2),:) + V_world(F(:,3),:) ) / 3;
+
+%% Plot the boat
+
+figure; hold on;
+
+
+hSurf = trisurf(F, V_world(:,1), V_world(:,2), V_world(:,3), 'FaceAlpha', 0.5, 'EdgeColor', 'k', 'FaceColor', [0.2 0.6 0.8]);
+
+
+quiver3(centroids(:,1), centroids(:,2), centroids(:,3), normals(:,1), normals(:,2), normals(:,3), 0.5, 'r');
+
+axis equal;
+
+grid on;
+xlabel('X (forward)');
+ylabel('Y (lateral)');
+zlabel('Z (vertical)');
+title('3D Boat in World Frame with Surface Normals');
+
+view(3);
+
+camlight('headlight');
+lighting gouraud;
+
+rotate3d on;
+
+
+%% Load wind field
+load('windField.mat', 'wind');  
+%% Boat triangle centroids 
+
+Xb = centroids(:,1); 
+Yb = centroids(:,2);  
+Zb = centroids(:,3);  
+Ntri = numel(Xb);     
+Ntime = numel(wind.t);
+
+%% Preallocate wind at boat
+u_boat = zeros(Ntime, Ntri);
+v_boat = zeros(Ntime, Ntri);
+w_boat = zeros(Ntime, Ntri);
+
+%% Interpolate wind at each time step
+[Xg, Yg, Zg] = meshgrid(wind.x, wind.y, wind.z); 
+
+for t_idx = 1:Ntime
+    u_slice = squeeze(wind.u(t_idx,:,:,:)); 
+    u_slice = permute(u_slice, [2,1,3]);    
+    
+    v_slice = squeeze(wind.v(t_idx,:,:,:));
+    v_slice = permute(v_slice, [2,1,3]);
+    
+    w_slice = squeeze(wind.w(t_idx,:,:,:));
+    w_slice = permute(w_slice, [2,1,3]);
+    
+    % Interpolate at centroids
+    u_boat(t_idx,:) = interp3(Xg, Yg, Zg, u_slice, Xb, Yb, Zb, 'linear');
+    v_boat(t_idx,:) = interp3(Xg, Yg, Zg, v_slice, Xb, Yb, Zb, 'linear');
+    w_boat(t_idx,:) = interp3(Xg, Yg, Zg, w_slice, Xb, Yb, Zb, 'linear');
+end
+
+%% Validation
+
+% Check for NaNs in interpolated wind
+if any(isnan(u_boat(:))) || any(isnan(v_boat(:))) || any(isnan(w_boat(:)))
+    warning('Some triangle centroids are outside the wind grid. Interpolated wind contains NaNs.');
+else
+    disp('All triangle centroids have valid wind vectors (no NaNs).');
+end
+
+wind_mag = sqrt(u_boat.^2 + v_boat.^2 + w_boat.^2);
+[min(wind_mag(:)), max(wind_mag(:))]
+
+
+%% Visualise boat
+t0 = 5;      % time step
+scale = 1;   % adjust arrow length
+
+figure; hold on;
+patch('Faces', F, 'Vertices', V_world(:,[1 3]), 'FaceColor', [0.2 0.6 0.8], 'FaceAlpha', 0.3);
+
+quiver(Xb, Zb, u_boat(t0,:)', w_boat(t0,:)', scale, 'r', 'LineWidth', 1.5);
+
+axis equal;
+grid on;
+xlabel('X (forward)');
+ylabel('Z (vertical)');
+title(['Wind vectors at boat surface (side view), t = ', num2str(wind.t(t0)), ' s']);
+
+%% Visualise wind vector
+
+tri_idx = 1;   % first triangle, you can choose any
+t0 = wind.t;   % time vector
+
+u = u_boat(:,tri_idx);  % [time x 1]
+v = v_boat(:,tri_idx);
+w = w_boat(:,tri_idx);
+
+speed = sqrt(u.^2 + v.^2 + w.^2);
+
+
+figure;
+subplot(4,1,1)
+plot(t0, u, 'r', 'LineWidth', 1.2); ylabel('u [m/s]'); grid on;
+title(['Wind components at triangle ', num2str(tri_idx)]);
+
+subplot(4,1,2)
+plot(t0, v, 'b', 'LineWidth', 1.2); ylabel('v [m/s]'); grid on;
+
+subplot(4,1,3)
+plot(t0, w, 'k', 'LineWidth', 1.2); ylabel('w [m/s]'); grid on;
+
+subplot(4,1,4)
+plot(t0, speed, 'm', 'LineWidth', 1.2); xlabel('Time [s]'); ylabel('Wind speed [m/s]'); grid on;
+
+%% Compute magnitude and angle for each vector
+
+
+[Nt, Ntri] = size(u_boat); % Time and centroid number
+
+normals3 = reshape(normals, [1, Ntri, 3]);
+
+
+wind_vecs = cat(3, u_boat, v_boat, w_boat);
+
+
+wind_mag = sqrt(sum(wind_vecs.^2, 3));   
+
+dotprod = sum(wind_vecs .* normals3, 3);
+
+wind_angle = acosd(dotprod ./ wind_mag); 

@@ -1,0 +1,173 @@
+%% Full 3D Wind Grid Simulation
+clearvars; close all; clc;
+
+%% User Inputs
+Umean = 10;       % Mean wind speed [m/s]
+theta = 30;       % Mean wind direction (from north, clockwise) [deg]
+fs = 4;          % Sampling frequency [Hz]
+M = 5;           % Time resolution: N = 2^M
+Nxx = 10;          % Grid points along x
+Nyy = 10;          % Grid points along y
+Nzz = 5;          % Grid points along z
+xmin = 0; xmax = 6;  % x-range [m]
+ymin = 0; ymax = 6; % y-range [m]
+zmin = 1; zmax = 6;  % z-range [m]
+
+u_star = 0.8;     % Friction velocity [m/s]
+kappa = 0.4;      % von Karman constant
+z0 = 0.03;        % Roughness length [m]
+
+%% Generate all the values needed
+% Time vector
+[t,f] = getSamplingPara(M,fs); 
+N = numel(t);
+dt = median(diff(t));
+
+% Create 3D Grid
+x = linspace(xmin,xmax,Nxx);
+y = linspace(ymin,ymax,Nyy);
+z = linspace(zmin,zmax,Nzz);
+[Y,Z,X] = meshgrid(y,z,x);
+
+% Mean wind profile (logarithmic in z)
+logProfile = @(u_star,z,z0,kappa)  u_star/kappa.*log(z./z0);
+Ugrid = logProfile(u_star,Z,z0,kappa);
+
+% Coherence parameters
+CohDecay.Cuy = 7; CohDecay.Cuz = 10;
+CohDecay.Cvy = 7; CohDecay.Cvz = 10;
+CohDecay.Cwy = 6.5; CohDecay.Cwz = 3;
+
+% PSD using Kaimal model
+[Su,Sv,Sw,Suw,~] = KaimalModel(Ugrid(:,:,1),Z(:,:,1),f,u_star);
+
+% Preallocate 3D wind matrices
+u_grid = zeros(N,Nzz,Nyy,Nxx);
+v_grid = zeros(N,Nzz,Nyy,Nxx);
+w_grid = zeros(N,Nzz,Nyy,Nxx);
+
+%% Loop over x-slices
+for ix = 1:Nxx
+    % Extract y-z slice for this x
+    Yslice = Y(:,:,ix);
+    Zslice = Z(:,:,ix);
+    Uslice = Ugrid(:,:,1);  % logarithmic mean wind profile
+    
+    % Generate turbulent wind for this y-z slice
+    [u_turb, v_turb, w_turb, nodes] = windSimFast(Uslice, f, Su, Sv, Sw, CohDecay, Yslice, Zslice, 'Suw', Suw);
+    
+    % Add mean wind
+    u_total = bsxfun(@plus, u_turb, Uslice(:)'); 
+    
+    % Reshape to 3D: [time x z x y]
+    u_grid(:,:,:,ix) = reshape(u_total, N, Nzz, Nyy);
+    v_grid(:,:,:,ix) = reshape(v_turb, N, Nzz, Nyy);
+    w_grid(:,:,:,ix) = reshape(w_turb, N, Nzz, Nyy);
+end
+%% Rotate according to mean wind direction
+theta_rad = deg2rad(theta);
+u_rot = u_grid*cos(theta_rad) - v_grid*sin(theta_rad);
+v_rot = u_grid*sin(theta_rad) + v_grid*cos(theta_rad);
+
+%% Compute values
+
+windSpeed = sqrt(u_rot.^2 + v_rot.^2 + w_grid.^2); % [time x z x y x x]
+
+windDir = atan2d(v_rot, u_rot);  % returns angles in degrees
+windDir = mod(270 - windDir, 360); % Convert to meteorological convention
+
+%% Select a time step to plot
+t0 = 1; % first time step
+speedSlice = squeeze(windSpeed(t0,:,:,:));   % [z x y x x]
+dirSlice   = squeeze(windDir(t0,:,:,:));     % [z x y x x]
+
+% Extract grid coordinates
+Xplot = squeeze(X(:,:, :)); % [z x y x x]
+Yplot = squeeze(Y(:,:, :));
+Zplot = squeeze(Z(:,:, :));
+
+% Flatten for quiver3
+Xf = Xplot(:);
+Yf = Yplot(:);
+Zf = Zplot(:);
+
+% Wind components for arrows (project horizontal speed using direction)
+Uf = speedSlice(:) .* cosd(dirSlice(:));  % x-component
+Vf = speedSlice(:) .* sind(dirSlice(:));  % y-component
+Wf = zeros(size(Uf));  % you can optionally use w_grid instead
+
+%% Plot 3D quiver
+figure;
+quiver3(Xf, Yf, Zf, Uf, Vf, Wf, 0.5, 'LineWidth', 1);
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+title(['3D Wind Field at t = ', num2str(t(t0)), ' s']);
+grid on; axis equal; view(45,30); set(gcf,'color','w');
+
+
+cmap = jet(256);
+speedNorm = (speedSlice(:) - min(speedSlice(:))) / (max(speedSlice(:)) - min(speedSlice(:)));
+colorIdx = round(speedNorm*255)+1;
+hold on;
+for k = 1:numel(Xf)
+    quiver3(Xf(k),Yf(k),Zf(k),Uf(k),Vf(k),Wf(k),0.5,'Color',cmap(colorIdx(k),:),'LineWidth',1);
+end
+colorbar;
+
+%% Wind time history at a selected grid point
+
+% Select grid indices (change as needed)
+ix = round(Nxx/2);   % x-location
+iy = round(Nyy/2);   % y-location
+iz = round(Nzz/2);   % z-location
+
+u_ts = squeeze(u_rot(:,iz,iy,ix));
+v_ts = squeeze(v_rot(:,iz,iy,ix));
+w_ts = squeeze(w_grid(:,iz,iy,ix));
+speed_ts = squeeze(windSpeed(:,iz,iy,ix));
+dir_ts = squeeze(windDir(:,iz,iy,ix));
+
+% Plot
+figure;
+
+subplot(3,1,1)
+plot(t, speed_ts, 'LineWidth', 1.2)
+ylabel('Wind speed [m/s]')
+title(sprintf('Wind time history at (x=%.1f, y=%.1f, z=%.1f m)', ...
+              x(ix), y(iy), z(iz)))
+grid on
+
+subplot(3,1,2)
+plot(t, dir_ts, 'LineWidth', 1.2)
+ylabel('Wind direction [deg]')
+ylim([0 360])
+grid on
+
+subplot(3,1,3)
+plot(t, u_ts, 'r', t, v_ts, 'b', t, w_ts, 'k', 'LineWidth', 1.1)
+xlabel('Time [s]')
+ylabel('Velocity [m/s]')
+legend('u','v','w','Location','best')
+grid on
+
+set(gcf,'color','w')
+
+
+%% Save it to file and make sure it has the correct format
+
+wind.u = permute(u_rot, [1, 3, 4, 2]); 
+wind.v = permute(v_rot, [1, 3, 4, 2]);
+wind.w = permute(w_grid, [1, 3, 4, 2]);
+
+wind.x = x; 
+wind.y = y;  
+wind.z = z;  
+wind.t = t;
+
+% Metadata
+wind.meta.Umean = Umean;
+wind.meta.theta = theta;
+wind.meta.fs = fs;
+wind.meta.description = '3D turbulent wind field, Kaimal + Davenport, permuted to match boat script';
+
+% Save
+save('windField.mat', 'wind', '-v7.3');
