@@ -42,7 +42,7 @@ mesh = plotter.add_mesh(
 # JONSWAP spectrum parameters
 # ----------------------------
 g = 9.81
-Hs = 2.5
+Hs = 2.51
 Tp = 6.0    
 gamma = 3.3
 
@@ -50,14 +50,19 @@ f = np.linspace(0.01, 1.0, 50)
 omega = 2 * np.pi * f
 
 fp = 1.0 / Tp
-alpha = 0.0081
 sigma = np.where(f <= fp, 0.07, 0.09)
 
-S_jonswap = (
-    alpha * g**2 / (2*np.pi)**4 / f**5 *
+S_raw = (
+    g**2 / (2*np.pi)**4 / f**5 *
     np.exp(-1.25 * (fp / f)**4) *
     gamma ** np.exp(-0.5 * ((f - fp) / (sigma * fp))**2)
 )
+
+# --- normalize to target Hs ---
+m0_raw = np.trapz(S_raw, f)
+m0_target = (Hs / 4.0)**2
+
+S_jonswap = S_raw * (m0_target / m0_raw)
 
 np.random.seed(42)
 phases = np.random.uniform(0, 2*np.pi, len(f))
